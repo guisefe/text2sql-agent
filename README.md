@@ -7,7 +7,6 @@
 
 A metadata-driven Text2SQL agent that converts natural language questions into SQL queries against ERP data. Powered by **Groq API (llama-3.1-8b-instant)** and built with FastAPI.
 
-The schema mirrors a commercial ERP module — customers, products, and sales orders — the kind of data found in systems like Londrisoft Gestor.
 
 > **Demo project.** Intentional limitations documented below.
 
