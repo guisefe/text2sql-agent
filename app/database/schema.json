@@ -1,0 +1,40 @@
+{
+  "tables": [
+    {
+      "name": "clientes",
+      "description": "Cadastro de clientes da empresa. Cada cliente possui segmento de mercado e localização.",
+      "columns": [
+        {"name": "id",       "type": "INTEGER", "description": "Identificador único do cliente."},
+        {"name": "nome",     "type": "TEXT",    "description": "Razão social ou nome do cliente."},
+        {"name": "cidade",   "type": "TEXT",    "description": "Cidade onde o cliente está localizado."},
+        {"name": "estado",   "type": "TEXT",    "description": "Sigla do estado (UF)."},
+        {"name": "segmento", "type": "TEXT",    "description": "Segmento de mercado: Varejo, Atacado, Saúde, Tecnologia, Construção."},
+        {"name": "ativo",    "type": "INTEGER", "description": "1 se o cliente está ativo, 0 se inativo."}
+      ]
+    },
+    {
+      "name": "produtos",
+      "description": "Catálogo de produtos e serviços oferecidos, como módulos de ERP, licenças e serviços de suporte.",
+      "columns": [
+        {"name": "id",             "type": "INTEGER", "description": "Identificador único do produto."},
+        {"name": "descricao",      "type": "TEXT",    "description": "Nome ou descrição do produto/serviço."},
+        {"name": "categoria",      "type": "TEXT",    "description": "Categoria: Software ou Serviço."},
+        {"name": "preco_unitario", "type": "REAL",    "description": "Preço unitário em reais."},
+        {"name": "estoque_atual",  "type": "INTEGER", "description": "Quantidade disponível em estoque."}
+      ]
+    },
+    {
+      "name": "pedidos",
+      "description": "Registro de pedidos de venda. Cada pedido vincula um cliente a um produto com quantidade e valor.",
+      "columns": [
+        {"name": "id",          "type": "INTEGER", "description": "Identificador único do pedido."},
+        {"name": "cliente_id",  "type": "INTEGER", "description": "Referência ao cliente (clientes.id)."},
+        {"name": "produto_id",  "type": "INTEGER", "description": "Referência ao produto (produtos.id)."},
+        {"name": "quantidade",  "type": "INTEGER", "description": "Quantidade de itens no pedido."},
+        {"name": "valor_total", "type": "REAL",    "description": "Valor total do pedido em reais."},
+        {"name": "status",      "type": "TEXT",    "description": "Status do pedido: aprovado, pendente ou cancelado."},
+        {"name": "data_pedido", "type": "TEXT",    "description": "Data do pedido no formato YYYY-MM-DD."}
+      ]
+    }
+  ]
+}
