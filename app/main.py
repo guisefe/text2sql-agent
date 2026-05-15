@@ -25,7 +25,7 @@ app = FastAPI(
     title="Text2SQL Agent — ERP",
     description=(
         "Agente Text2SQL metadata-driven para dados de ERP. "
-        "Converte perguntas em linguagem natural em SQL usando Groq API (llama3-8b)."
+        "Converte perguntas em linguagem natural em SQL usando Groq API (llama-3.1-8b-instant)."
     ),
     version="1.0.0",
 )
