@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+dist/
+build/
+
+# Environments
+.venv/
+venv/
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Database
+*.db
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
