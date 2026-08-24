@@ -24,10 +24,10 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(
     title="Text2SQL Agent — ERP",
     description=(
-        "Agente Text2SQL metadata-driven para dados de ERP. "
-        "Converte perguntas em linguagem natural em SQL usando Groq API (llama-3.1-8b-instant)."
+        "Guardrailed Text-to-SQL agent for ERP data. It translates natural-language "
+        "questions into validated read-only SQL before execution."
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -39,10 +39,10 @@ _llm = LLMService()
 _executor = SQLExecutor(_schema)
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query", response_model=QueryResponse, tags=["agent"])
 @limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 def process_query(request: Request, payload: QueryRequest) -> QueryResponse:
-    """Converte uma pergunta em linguagem natural em SQL e executa no banco."""
+    """Translate a natural-language ERP question into validated read-only SQL."""
     logger.info("Query recebida: %r", payload.query)
     t_start = time.perf_counter()
 
@@ -55,15 +55,21 @@ def process_query(request: Request, payload: QueryRequest) -> QueryResponse:
             ),
         )
 
+    if not getattr(_llm, "configured", True):
+        raise HTTPException(
+            status_code=503,
+            detail="LLM não configurado. Defina GROQ_API_KEY antes de usar /query.",
+        )
+
     prompt = _prompt_builder.build_prompt(payload.query)
-    hits_before = _llm.generate_sql.cache_info().hits
+    hits_before = getattr(_llm, "cache_hits", 0)
 
     try:
         sql = _llm.generate_sql(payload.query, prompt)
-    except RuntimeError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    cached = _llm.generate_sql.cache_info().hits > hits_before
+    cached = getattr(_llm, "cache_hits", 0) > hits_before
 
     try:
         rows = _executor.execute(sql)
@@ -74,12 +80,12 @@ def process_query(request: Request, payload: QueryRequest) -> QueryResponse:
             sql = _llm.generate_sql(payload.query, fallback)
             rows = _executor.execute(sql)
             cached = False
-        except (ValueError, RuntimeError) as e:
-            logger.error("Fallback também falhou: %s", e)
-            raise HTTPException(status_code=400, detail=str(e))
-    except Exception:
+        except (ValueError, RuntimeError) as exc:
+            logger.error("Fallback também falhou: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         logger.exception("Erro inesperado ao executar SQL.")
-        raise HTTPException(status_code=500, detail="Erro interno ao processar a query.")
+        raise HTTPException(status_code=500, detail="Erro interno ao processar a query.") from exc
 
     total_ms = (time.perf_counter() - t_start) * 1000
 
@@ -94,12 +100,17 @@ def process_query(request: Request, payload: QueryRequest) -> QueryResponse:
     )
 
 
-@app.get("/schema")
+@app.get("/schema", tags=["metadata"])
 def get_schema() -> dict:
-    """Retorna os metadados do schema usado pelo agente."""
+    """Return the schema metadata supplied to the agent."""
     return _schema
 
 
-@app.get("/health")
+@app.get("/health", tags=["operations"])
 def health() -> dict:
-    return {"status": "ok", "version": "1.0.0", "model": settings.groq_model}
+    return {
+        "status": "ok",
+        "version": app.version,
+        "model": settings.groq_model,
+        "llm_configured": getattr(_llm, "configured", True),
+    }
