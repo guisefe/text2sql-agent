@@ -1,192 +1,206 @@
 # Text2SQL Agent — ERP
 
 [![CI](https://github.com/guisefe/text2sql-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/guisefe/text2sql-agent/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Status](https://img.shields.io/badge/status-demo-orange.svg)
+![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-API-009688)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-demo-orange)
 
-A metadata-driven Text2SQL agent that converts natural language questions into SQL queries against ERP data. Powered by **Groq API (llama-3.1-8b-instant)** and built with FastAPI.
+A **guardrailed Text-to-SQL agent** that turns natural-language questions about ERP data into validated, read-only SQL and executes only the statements allowed by a deterministic safety layer.
 
+The project is intentionally small enough to understand end to end: the LLM proposes SQL, application code validates the action, SQLAlchemy executes it, and the agent can make one controlled retry when the proposal fails.
 
-> **Demo project.** Intentional limitations documented below.
+> This is a portfolio/demo system, not a production database gateway. The limitations and production gaps are documented explicitly.
 
----
+## Why this is useful
 
-## How it works
+Giving an LLM direct database access is unsafe. A useful Text-to-SQL system needs more than a prompt:
 
-1. User sends a natural language question to `/query`
-2. **Semantic gate** rejects questions unrelated to the schema
-3. **PromptBuilder** injects schema metadata and few-shot examples into a prompt
-4. **Groq API** (llama-3.1-8b-instant) generates one SQL SELECT statement
-5. **SQLValidator** checks the SQL against a whitelist of tables, columns, keywords and functions
-6. On validation failure, the agent retries once with a fallback prompt
-7. **SQLExecutor** runs the validated SQL with parametrized string literals
-8. Returns SQL, result rows and timing metrics
+- a bounded business schema;
+- deterministic validation outside the model;
+- protection against write/DDL statements and unknown identifiers;
+- controlled failure/retry behavior;
+- execution metrics and testable contracts.
 
----
+This repository focuses on those engineering boundaries rather than on building a generic chatbot UI.
+
+## Agent flow
+
+```mermaid
+flowchart LR
+    A[User question] --> B[Schema relevance gate]
+    B -->|off-domain| X[Reject]
+    B -->|in-domain| C[Prompt + schema metadata]
+    C --> D[Groq LLM]
+    D --> E[SQL validator]
+    E -->|safe| F[Parameterized execution]
+    F --> G[Rows + metrics]
+    E -->|invalid| H[One fallback attempt]
+    H --> E
+```
+
+### What makes it agentic?
+
+It is a **single-purpose, bounded agentic workflow**, not a general autonomous agent. It receives a goal, uses an LLM for the probabilistic generation step, validates the proposed action, executes an allowed tool (SQL), observes failure, and can self-correct once. The loop is deliberately bounded for safety and predictable latency.
+
+## Safety contract
+
+The model is never trusted to decide whether its SQL may run.
+
+The validator currently allows only:
+
+- one `SELECT` statement;
+- one table from the approved schema;
+- known columns and allowlisted functions;
+- safe literals and supported read-only clauses.
+
+It rejects, among other cases:
+
+- `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`;
+- multiple statements and SQL comments;
+- unknown tables/columns;
+- `UNION`, JOINs and subqueries;
+- dangerous SQLite-specific operations/functions included in the deny checks.
+
+String literals are then converted to SQLAlchemy bind parameters before execution.
+
+## Demo domain
+
+The included SQLite database models a small commercial ERP module:
+
+| Table | Purpose |
+|---|---|
+| `clientes` | customer registry, location, segment and active status |
+| `produtos` | product/service catalog, price and stock |
+| `pedidos` | order value, quantity, status and date |
+
+Model-facing descriptions live in `app/database/schema.json`; executable DDL and seed data live in `app/database/schema.sql`.
 
 ## Quick start
 
-### Option 1: Docker
+### 1. Install
 
 ```bash
 git clone https://github.com/guisefe/text2sql-agent.git
 cd text2sql-agent
-cp .env.example .env
-# Add your GROQ_API_KEY to .env
-docker compose up --build
-```
-
-### Option 2: Local Python
-
-```bash
-git clone https://github.com/guisefe/text2sql-agent.git
-cd text2sql-agent
-
 python -m venv .venv
-source .venv/bin/activate     # Windows: .venv\Scripts\activate
-
-pip install -r requirements.txt
-cp .env.example .env
-# Add your GROQ_API_KEY to .env
-uvicorn app.main:app --reload
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
 ```
 
-Get a free Groq API key at [console.groq.com](https://console.groq.com).
-
----
-
-## Usage
+### 2. Configure Groq
 
 ```bash
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Liste os clientes ativos"}'
+cp .env.example .env
 ```
+
+Set your key in `.env`:
+
+```text
+GROQ_API_KEY=your_key_here
+GROQ_MODEL=llama-3.1-8b-instant
+```
+
+The API can start without a key so `/health` remains available, but `/query` will return HTTP 503 until the LLM is configured.
+
+### 3. Run
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Open the interactive API documentation at `http://localhost:8000/docs`.
+
+## Three-query live demo
+
+### Successful query
 
 ```json
 {
-  "sql": "SELECT id, nome, cidade, estado, segmento FROM clientes WHERE ativo = 1",
-  "result": [
-    {"id": 1, "nome": "Mercado Central Ltda", "cidade": "Sao Paulo", "estado": "SP", "segmento": "Varejo"},
-    {"id": 2, "nome": "Distribuidora Norte SA", "cidade": "Manaus", "estado": "AM", "segmento": "Atacado"}
-  ],
-  "row_count": 4,
-  "cached": false,
-  "llm_inference_ms": 198.1,
-  "sql_execution_ms": 1.0,
-  "total_ms": 207.8
+  "query": "Liste os clientes ativos"
 }
 ```
 
----
+### Aggregation
 
-## Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/query` | Convert question to SQL and execute |
-| `GET` | `/schema` | Return current schema metadata |
-| `GET` | `/health` | Liveness check |
-
-Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
----
-
-## Schema
-
-Three tables from a commercial ERP module:
-
-| Table | Description |
-|-------|-------------|
-| `clientes` | Customer registry — name, city, state, segment, active status |
-| `produtos` | Product catalog — description, category, unit price, stock |
-| `pedidos` | Sales orders — customer, product, quantity, total, status, date |
-
----
-
-## Example questions
-
-| Question | Generated SQL |
-|---|---|
-| Liste os clientes ativos | `SELECT id, nome FROM clientes WHERE ativo = 1` |
-| Qual o valor total dos pedidos aprovados? | `SELECT SUM(valor_total) FROM pedidos WHERE status = 'aprovado'` |
-| Quantos pedidos estao pendentes? | `SELECT COUNT(*) FROM pedidos WHERE status = 'pendente'` |
-| Qual o produto mais caro? | `SELECT descricao, preco_unitario FROM produtos ORDER BY preco_unitario DESC LIMIT 1` |
-| Quais clientes sao do estado de SP? | `SELECT nome, cidade FROM clientes WHERE estado = 'SP'` |
-
----
-
-## Safety layers
-
-1. **Input validation** — Pydantic enforces query length (5-500 chars)
-2. **Semantic gate** — query must mention a table or column from the schema
-3. **LLM output cleaning** — strips markdown fences, prefixes, whitespace
-4. **Whitelist SQL validator** — only approved keywords, functions, tables, columns
-5. **String literal parametrization** — bind parameters before execution
-6. **Retry with fallback prompt** — on validation failure, retries once
-7. **Rate limiting** — configurable per-IP limit (default 30/min)
-
----
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GROQ_API_KEY` | — | **Required.** Free at console.groq.com |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model to use |
-| `DATABASE_URL` | `sqlite:///./erp.db` | SQLAlchemy connection string |
-| `RATE_LIMIT_PER_MINUTE` | `30` | Max requests per IP per minute |
-| `LOG_LEVEL` | `INFO` | Logging verbosity |
-
----
-
-## Project structure
-
+```json
+{
+  "query": "Qual o valor total dos pedidos aprovados?"
+}
 ```
+
+### Off-domain rejection
+
+```json
+{
+  "query": "Qual a capital do Brasil?"
+}
+```
+
+The third request is rejected before the LLM call because the question does not reference the bounded ERP schema.
+
+## API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/query` | generate, validate and execute read-only SQL |
+| `GET` | `/schema` | inspect the metadata supplied to the agent |
+| `GET` | `/health` | liveness plus model/configuration status |
+
+A successful `/query` response includes the generated SQL, result rows, row count, cache state, LLM latency, SQL latency and total latency.
+
+## Engineering structure
+
+```text
 app/
-├── main.py                FastAPI app, endpoints, orchestration
-├── config.py              pydantic-settings, .env support
-├── logging_config.py      Structured logging
+├── main.py                 API orchestration and bounded retry
+├── config.py               environment configuration
 ├── database/
-│   ├── connection.py      Engine, DB init, schema loader
-│   ├── schema.json        Table/column metadata for the LLM
-│   └── schema.sql         DDL and seed data
-├── models/
-│   ├── request_models.py  Input validation
-│   └── response_models.py Response with timing metrics
+│   ├── connection.py       SQLAlchemy engine + demo initialization
+│   ├── schema.json         model-facing schema metadata
+│   └── schema.sql          SQLite DDL + seed data
+├── models/                 request/response contracts
 ├── services/
-│   ├── llm_service.py     Groq API wrapper with caching
-│   ├── prompt_builder.py  Prompt + fallback construction
-│   └── sql_executor.py    Validated + parametrized execution
+│   ├── llm_service.py      Groq boundary + cache
+│   ├── prompt_builder.py   schema-aware few-shot prompt
+│   └── sql_executor.py     validation + parameterized execution
 └── validators/
-    └── sql_validator.py   Whitelist validator + semantic gate
-tests/                     40+ tests across all layers
+    └── sql_validator.py    deterministic SQL safety policy
+
+tests/                      unit + API integration tests
 ```
 
----
+## Quality
 
-## Running tests
+CI runs on **Python 3.11 and 3.12** and performs:
 
 ```bash
-pytest -v
-pytest --cov=app    # with coverage report
+ruff check app tests
+pytest -v --cov=app --cov-report=term-missing --cov-fail-under=85
 ```
 
----
+The current demo baseline has **54 automated tests** and maintains an **85% minimum application coverage gate**.
 
-## Known limitations
+## Docker
 
-- **Single table per query** — JOINs are blocked by design for this demo
-- **Model sensitivity** — specific questions yield better SQL (e.g. "valor total em reais" instead of "total")
-- **No authentication** — add auth before exposing publicly
-- **In-memory rate limiting** — use Redis for multi-instance deployments
-- **SQLite only** — replace `DATABASE_URL` for PostgreSQL/MySQL in production
+```bash
+docker compose up --build
+```
 
-See [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) and [DECISIONS.md](DECISIONS.md).
+The container exposes port `8000` and includes a `/health` healthcheck.
 
----
+## Intentional limitations
+
+- one-table SQL only; JOINs are outside the current validation contract;
+- SQLite demo storage;
+- no authentication/authorization yet;
+- in-memory rate limiting;
+- one hosted LLM provider;
+- lexical schema-relevance gate rather than a learned classifier;
+- no request-level distributed tracing or cost telemetry.
+
+These are treated as engineering boundaries, not hidden behind production claims. See [Technical Documentation](TECHNICAL_DOCUMENTATION.md) and [Design Decisions](DECISIONS.md) for the rationale and production evolution path.
 
 ## License
 
-MIT (c) Guilherme Senis Fernandes
+MIT © Guilherme Senis Fernandes
