@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,24 +17,24 @@ jobs:
         python-version: ["3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install ruff pytest-cov
+          python -m pip install -r requirements.txt
+          python -m pip install ruff pytest-cov
 
       - name: Lint
         run: ruff check app tests
 
       - name: Test
-        run: pytest -v --cov=app --cov-report=term-missing
+        run: pytest -v --cov=app --cov-report=term-missing --cov-fail-under=85
         env:
           GROQ_API_KEY: "dummy-key-for-tests"
           DATABASE_URL: "sqlite:///./test.db"
