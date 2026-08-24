@@ -3,45 +3,137 @@
 [![CI](https://github.com/guisefe/text2sql-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/guisefe/text2sql-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-demo-orange)
+![Groq](https://img.shields.io/badge/LLM-Groq%20%2B%20Llama--3.1-purple)
+![SQLite](https://img.shields.io/badge/Database-SQLite-lightgrey)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-Execution-red)
+![Ruff](https://img.shields.io/badge/Lint-Ruff-black)
+![Coverage](https://img.shields.io/badge/Coverage-%E2%89%A585%25-brightgreen)
+![Agentic](https://img.shields.io/badge/Agentic%20workflow-Bounded-orange)
+![Safety](https://img.shields.io/badge/Guardrails-Deterministic-success)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-Interview%20demo-orange)
 
-A **guardrailed Text-to-SQL agent** that turns natural-language questions about ERP data into validated, read-only SQL and executes only the statements allowed by a deterministic safety layer.
+A **guardrailed Text-to-SQL agent** that lets a user ask questions about ERP data in plain Portuguese and returns database answers through validated, read-only SQL.
 
-The project is intentionally small enough to understand end to end: the LLM proposes SQL, application code validates the action, SQLAlchemy executes it, and the agent can make one controlled retry when the proposal fails.
+The important idea is simple:
 
-> This is a portfolio/demo system, not a production database gateway. The limitations and production gaps are documented explicitly.
+> The LLM is allowed to **propose** SQL. The application decides whether that SQL is safe enough to run.
 
-## Why this is useful
+This project is intentionally small enough to understand in one interview, but realistic enough to discuss LLM safety, tool use, validation, fallback, API contracts, testing and production evolution.
 
-Giving an LLM direct database access is unsafe. A useful Text-to-SQL system needs more than a prompt:
+---
 
-- a bounded business schema;
-- deterministic validation outside the model;
-- protection against write/DDL statements and unknown identifiers;
-- controlled failure/retry behavior;
-- execution metrics and testable contracts.
+## 30-second explanation
 
-This repository focuses on those engineering boundaries rather than on building a generic chatbot UI.
+Many business users need answers from databases but do not know SQL.
 
-## Agent flow
+A risky solution would be: send the database schema to an LLM and execute whatever it returns.
+
+This project takes a safer approach:
+
+1. the user asks a question;
+2. the system checks whether the question belongs to the ERP domain;
+3. the LLM generates a SQL proposal;
+4. a deterministic validator checks the SQL;
+5. only validated `SELECT` queries are executed;
+6. the API returns rows, generated SQL and timing metrics.
+
+If the generated SQL is invalid, the agent gets **one bounded retry**. If it still fails, the system refuses instead of forcing an unsafe answer.
+
+---
+
+## What this project demonstrates
+
+| Capability | How it appears in this project |
+|---|---|
+| LLM application design | the model is used only for the probabilistic Text-to-SQL step |
+| Agentic workflow | goal → proposed action → tool validation → execution → bounded retry |
+| Backend engineering | FastAPI contracts, configuration, services and clear module boundaries |
+| SQL safety | deterministic validation before execution |
+| Guardrails | off-domain rejection, allowlists, blocked SQL patterns and parameterization |
+| Testing discipline | unit and API integration tests with CI and coverage gate |
+| Interview storytelling | clear demo path with success, aggregation and rejection cases |
+
+---
+
+## Architecture in one picture
+
+```mermaid
+flowchart TD
+    U[Business user asks in Portuguese]
+    API[FastAPI /query]
+    REQ[Pydantic request validation]
+    GATE[Schema relevance gate]
+    PROMPT[PromptBuilder: schema metadata + examples]
+    LLM[Groq LLM: SQL proposal]
+    VALIDATOR[SQLValidator: deterministic safety policy]
+    EXECUTOR[SQLExecutor: bind params + SQLAlchemy]
+    DB[(SQLite ERP demo database)]
+    RESPONSE[SQL + rows + latency metrics]
+    REJECT[Reject: off-domain or unsafe]
+    RETRY[One fallback prompt]
+
+    U --> API
+    API --> REQ
+    REQ --> GATE
+    GATE -->|not ERP-related| REJECT
+    GATE -->|ERP-related| PROMPT
+    PROMPT --> LLM
+    LLM --> VALIDATOR
+    VALIDATOR -->|safe SELECT| EXECUTOR
+    EXECUTOR --> DB
+    DB --> RESPONSE
+    VALIDATOR -->|invalid SQL| RETRY
+    RETRY --> LLM
+    VALIDATOR -->|still invalid| REJECT
+```
+
+---
+
+## Cascading architecture
+
+The project is designed as a simple cascade so that each layer has one job:
+
+```mermaid
+flowchart TD
+    A[1. API Layer<br/>Receives the question and returns a contract]
+    B[2. Domain Gate<br/>Rejects questions unrelated to ERP data]
+    C[3. Prompt Layer<br/>Adds schema metadata and examples]
+    D[4. LLM Boundary<br/>Generates one SQL proposal]
+    E[5. Safety Layer<br/>Validates tables, columns, functions and SQL shape]
+    F[6. Execution Layer<br/>Parameterizes literals and runs SQLAlchemy]
+    G[7. Response Layer<br/>Returns result rows, generated SQL and metrics]
+
+    A --> B --> C --> D --> E --> F --> G
+```
+
+This separation makes the interview explanation easier:
+
+- **LLM layer:** handles language understanding.
+- **Safety layer:** decides what is allowed.
+- **Execution layer:** touches the database.
+- **Response layer:** exposes the result and observability data.
+
+---
+
+## Why this is agentic, but bounded
+
+This is not a fully autonomous multi-agent system. That is deliberate.
+
+It is a **single-purpose bounded agentic workflow**:
 
 ```mermaid
 flowchart LR
-    A[User question] --> B[Schema relevance gate]
-    B -->|off-domain| X[Reject]
-    B -->|in-domain| C[Prompt + schema metadata]
-    C --> D[Groq LLM]
-    D --> E[SQL validator]
-    E -->|safe| F[Parameterized execution]
-    F --> G[Rows + metrics]
-    E -->|invalid| H[One fallback attempt]
-    H --> E
+    Goal[User goal] --> Think[LLM proposes SQL]
+    Think --> Act[Tool call: SQL execution]
+    Act --> Observe[Rows or validation failure]
+    Observe --> Correct[One self-correction attempt]
+    Correct --> Act
 ```
 
-### What makes it agentic?
+The loop is intentionally limited to keep the system predictable in cost, latency and behavior.
 
-It is a **single-purpose, bounded agentic workflow**, not a general autonomous agent. It receives a goal, uses an LLM for the probabilistic generation step, validates the proposed action, executes an allowed tool (SQL), observes failure, and can self-correct once. The loop is deliberately bounded for safety and predictable latency.
+---
 
 ## Safety contract
 
@@ -64,17 +156,72 @@ It rejects, among other cases:
 
 String literals are then converted to SQLAlchemy bind parameters before execution.
 
+A good way to summarize the design:
+
+> Prompting is guidance. Validation is enforcement.
+
+---
+
 ## Demo domain
 
 The included SQLite database models a small commercial ERP module:
 
-| Table | Purpose |
-|---|---|
-| `clientes` | customer registry, location, segment and active status |
-| `produtos` | product/service catalog, price and stock |
-| `pedidos` | order value, quantity, status and date |
+| Table | Purpose | Example questions |
+|---|---|---|
+| `clientes` | customer registry, location, segment and active status | “Liste os clientes ativos” |
+| `produtos` | product/service catalog, price and stock | “Qual o produto mais caro?” |
+| `pedidos` | order value, quantity, status and date | “Qual o valor total dos pedidos aprovados?” |
 
 Model-facing descriptions live in `app/database/schema.json`; executable DDL and seed data live in `app/database/schema.sql`.
+
+---
+
+## Live demo script
+
+Use these three requests in the interview.
+
+### 1. Happy path
+
+```json
+{
+  "query": "Liste os clientes ativos"
+}
+```
+
+What to show:
+
+- schema gate accepts the ERP question;
+- LLM generates SQL;
+- validator approves;
+- executor returns rows.
+
+### 2. Aggregation
+
+```json
+{
+  "query": "Qual o valor total dos pedidos aprovados?"
+}
+```
+
+What to show:
+
+- the model maps natural language to `SUM(valor_total)`;
+- the response includes SQL, rows and latency metrics.
+
+### 3. Guardrail
+
+```json
+{
+  "query": "Qual a capital do Brasil?"
+}
+```
+
+What to show:
+
+- the system refuses before calling the LLM;
+- the project demonstrates safe failure, not only successful generation.
+
+---
 
 ## Quick start
 
@@ -111,33 +258,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 Open the interactive API documentation at `http://localhost:8000/docs`.
 
-## Three-query live demo
-
-### Successful query
-
-```json
-{
-  "query": "Liste os clientes ativos"
-}
-```
-
-### Aggregation
-
-```json
-{
-  "query": "Qual o valor total dos pedidos aprovados?"
-}
-```
-
-### Off-domain rejection
-
-```json
-{
-  "query": "Qual a capital do Brasil?"
-}
-```
-
-The third request is rejected before the LLM call because the question does not reference the bounded ERP schema.
+---
 
 ## API
 
@@ -147,7 +268,17 @@ The third request is rejected before the LLM call because the question does not 
 | `GET` | `/schema` | inspect the metadata supplied to the agent |
 | `GET` | `/health` | liveness plus model/configuration status |
 
-A successful `/query` response includes the generated SQL, result rows, row count, cache state, LLM latency, SQL latency and total latency.
+A successful `/query` response includes:
+
+- generated SQL;
+- result rows;
+- row count;
+- cache state;
+- LLM latency;
+- SQL execution latency;
+- total request latency.
+
+---
 
 ## Engineering structure
 
@@ -170,6 +301,8 @@ app/
 tests/                      unit + API integration tests
 ```
 
+---
+
 ## Quality
 
 CI runs on **Python 3.11 and 3.12** and performs:
@@ -181,6 +314,8 @@ pytest -v --cov=app --cov-report=term-missing --cov-fail-under=85
 
 The current demo baseline has **54 automated tests** and maintains an **85% minimum application coverage gate**.
 
+---
+
 ## Docker
 
 ```bash
@@ -189,17 +324,24 @@ docker compose up --build
 
 The container exposes port `8000` and includes a `/health` healthcheck.
 
+---
+
 ## Intentional limitations
 
-- one-table SQL only; JOINs are outside the current validation contract;
-- SQLite demo storage;
-- no authentication/authorization yet;
-- in-memory rate limiting;
-- one hosted LLM provider;
-- lexical schema-relevance gate rather than a learned classifier;
-- no request-level distributed tracing or cost telemetry.
+This is a bounded demo, not a production database gateway.
 
-These are treated as engineering boundaries, not hidden behind production claims. See [Technical Documentation](TECHNICAL_DOCUMENTATION.md) and [Design Decisions](DECISIONS.md) for the rationale and production evolution path.
+| Current limitation | Production evolution |
+|---|---|
+| one-table SQL only | relationship metadata, JOIN policy and stronger AST validation |
+| SQLite demo storage | PostgreSQL read replica and read-only database role |
+| no authentication/authorization | JWT/API key auth, RBAC and tenant isolation |
+| lexical schema gate | domain classifier or embedding-based table selection |
+| one LLM provider | provider interface with fallback and cost routing |
+| basic metrics | request tracing, token cost, accuracy evals and dashboards |
+
+These are treated as engineering boundaries, not hidden behind production claims. See [Technical Documentation](TECHNICAL_DOCUMENTATION.md), [Design Decisions](DECISIONS.md), [Architecture Notes](docs/architecture.md) and [Interview Mini Deck](docs/interview-mini-deck.md) for the rationale and presentation path.
+
+---
 
 ## License
 
