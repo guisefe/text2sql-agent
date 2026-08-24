@@ -1,41 +1,45 @@
 # Design Decisions
 
-## 1. Groq API over local models
+## 1. Hosted inference over a local model
 
-Local models (flan-t5, bloomz) run on CPU and generate incorrect SQL ~40% of the time for non-trivial queries. Groq's free tier provides llama3-8b with ~90% accuracy on simple SQL, 14,400 requests/day at no cost, and millisecond latency. For a demo, quality matters more than offline capability.
+This demo uses Groq-hosted inference with `llama-3.1-8b-instant`. The goal is to keep the local runtime lightweight while still exercising a real external LLM boundary. The provider is intentionally isolated in `LLMService` so the rest of the pipeline does not depend on Groq-specific code.
 
-## 2. ERP schema — commercial module
+## 2. ERP schema as the bounded domain
 
-The schema (clientes, produtos, pedidos) mirrors the core of a commercial ERP module — the kind found in systems like Londrisoft Gestor. This makes the demo contextually relevant for data engineering roles in the ERP/SaaS space.
+The schema (`clientes`, `produtos`, `pedidos`) represents a small commercial ERP domain. Keeping the domain bounded makes it possible to demonstrate generation, validation, execution, failure handling and observability without hiding the core behavior behind a large dataset.
 
-## 3. Whitelist validator over blacklist
+## 3. Deterministic guardrails around probabilistic generation
 
-Blacklists miss edge cases. The validator allows only explicitly approved tokens: SQL keywords, aggregate functions, table names, column names from schema.json, and safe literals. Everything else is rejected by default.
+The LLM may propose SQL, but it never decides what is safe to execute. Safety is enforced by deterministic application code: one SELECT statement, one approved table, approved columns/functions, no comments, no subqueries, no UNIONs, no JOINs and no write/DDL operations.
 
-## 4. String literal parametrization in executor
+## 4. String literal parametrization in the executor
 
-Even after whitelist validation, string literals are extracted and replaced with SQLAlchemy bind parameters. This adds a second layer of injection protection independent of the validator.
+After SQL validation, string literals are replaced with SQLAlchemy bind parameters before execution. This keeps user/model-generated values separate from the SQL statement and adds another defensive layer beyond token validation.
 
-## 5. Semantic gate
+## 5. Cheap schema-relevance gate before inference
 
-Before calling the LLM, the query is checked against schema terms (table names, column names, singular forms). Queries with no match are rejected immediately — no wasted API call.
+Before spending an LLM request, the application checks whether the question mentions a known table or column. This is intentionally a deterministic lexical gate, not an embedding-based semantic classifier. It is cheap, explainable and appropriate for this small demo domain.
 
-## 6. Retry with fallback prompt
+## 6. One controlled retry
 
-When the LLM generates invalid SQL on first attempt, the agent retries once with a prompt that includes the invalid SQL as context. This improves success rate on ambiguous questions without adding dependencies.
+If the first generated SQL fails validation or execution, the agent gets one fallback attempt containing the rejected SQL plus the schema. The retry is bounded to avoid uncontrolled loops, excess latency and unnecessary model usage.
 
-## 7. Cache by (user_query, prompt)
+## 7. Cache by query and full prompt
 
-Caching by user_query alone would return stale results if the prompt changes. Caching by prompt alone wastes memory on long strings. The tuple key balances correctness and efficiency.
+The LLM result is cached by `(user_query, prompt)`. Including the full prompt prevents a result generated against an older schema/examples prompt from being reused after the prompt changes.
 
-## 8. Sync endpoints (not async)
+## 8. Sync endpoint with a sync provider client
 
-Groq API calls are I/O-bound but use the synchronous groq client. FastAPI dispatches sync endpoints to a thread pool automatically. Using `async def` with a sync client would block the event loop.
+The Groq client used here is synchronous. FastAPI dispatches a normal `def` endpoint to its thread pool, which avoids blocking the event loop with a synchronous external API call.
 
-## 9. No JOINs
+## 9. No JOINs in the demo contract
 
-JOINs are blocked by the validator intentionally. A correct JOIN requires the LLM to know foreign key relationships — this would need additional prompt engineering (relationship descriptions, more examples) beyond the scope of this demo. Documented as a known limitation.
+JOINs are deliberately outside the current execution contract. Multi-table generation requires relationship-aware validation and broader evaluation. For a live demo, a smaller verified SQL surface is preferable to a broader but weakly controlled one.
 
-## 10. SQLite for demo, SQLAlchemy for portability
+## 10. SQLite for zero-setup demonstration
 
-SQLite requires zero setup. SQLAlchemy abstracts the engine — swapping to PostgreSQL or MySQL only requires changing DATABASE_URL.
+SQLite keeps the demo self-contained. SQLAlchemy isolates most database access, but production portability is not claimed to be configuration-only: a real migration to PostgreSQL/MySQL would also require the correct driver, dialect-aware validation, operational configuration and production testing.
+
+## 11. This is a single-purpose agentic workflow
+
+The project is intentionally not a general autonomous agent. It is a bounded Text-to-SQL agent: it receives a goal, uses an LLM for one probabilistic step, validates the proposed action, executes an allowed tool (SQL), observes failure, and can self-correct once. That constrained design is part of the safety model.
