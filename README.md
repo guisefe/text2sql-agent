@@ -10,6 +10,7 @@
 ![Coverage](https://img.shields.io/badge/Coverage-%E2%89%A585%25-brightgreen)
 ![Agentic](https://img.shields.io/badge/Agentic%20workflow-Bounded-orange)
 ![Safety](https://img.shields.io/badge/Guardrails-Deterministic-success)
+[![Presentation](https://img.shields.io/badge/Presentation-6%20slide%20deck-5B5FC7)](docs/interview-mini-deck.md)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Interview%20demo-orange)
 
@@ -20,6 +21,14 @@ The important idea is simple:
 > The LLM is allowed to **propose** SQL. The application decides whether that SQL is safe enough to run.
 
 This project is intentionally small enough to understand in one interview, but realistic enough to discuss LLM safety, tool use, validation, fallback, API contracts, testing and production evolution.
+
+### 🎤 Interview presentation
+
+Want the project in presentation form instead of reading the full repository?
+
+**[Open the 6-slide interview deck →](docs/interview-mini-deck.md)**
+
+It covers the problem, product idea, cascading architecture, guardrails, live demo and production evolution in roughly **5 minutes**.
 
 ---
 
