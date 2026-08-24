@@ -2,88 +2,103 @@
 
 ## Architecture overview
 
-```
+```text
 POST /query
     │
     ▼
-QueryRequest           pydantic validation (min 5, max 500 chars)
+QueryRequest             Pydantic input contract (5–500 chars)
     │
     ▼
-query_mentions_schema  semantic gate — rejects off-topic questions
+query_mentions_schema    deterministic schema-relevance gate
     │
     ▼
-PromptBuilder          schema metadata + few-shot examples → prompt string
+PromptBuilder            schema metadata + few-shot examples
     │
     ▼
-LLMService             Groq API (llama3-8b), cached by (user_query, prompt)
-    │                  _clean() strips markdown, prefixes, whitespace
+LLMService               Groq / llama-3.1-8b-instant
+    │                     cached by (user_query, prompt)
+    ▼
+SQLExecutor
+    ├── is_safe_sql       allowlisted read-only SQL contract
+    ├── _parametrize      bind string literals
+    └── SQLAlchemy        execute against SQLite demo database
     │
+    ├── failure → one bounded fallback generation → validate again
     ▼
-is_safe_sql            whitelist: keywords, functions, tables, columns
-    │                  rejects: subqueries, JOINs, UNIONs, comments, DDL
-    │  (invalid → fallback prompt → retry once)
-    ▼
-SQLExecutor            _parametrize() → bind params → SQLAlchemy execute()
-    │
-    ▼
-QueryResponse          sql, result, row_count, cached, timing metrics
+QueryResponse            SQL, rows, cache flag and timing metrics
 ```
+
+The LLM proposes an action; deterministic code decides whether that action is allowed to execute.
 
 ## Schema design
 
-The three-table schema represents a commercial ERP module:
+The demo contains three ERP-style tables:
 
-- **clientes** — customer registry with market segment and location
-- **produtos** — product/service catalog with pricing and stock
-- **pedidos** — sales orders linking customers to products
+- **clientes** — customer registry, market segment and location;
+- **produtos** — product/service catalog, pricing and stock;
+- **pedidos** — sales orders linking a customer and product.
 
-The schema.json file provides column-level descriptions that are injected into the LLM prompt, enabling the model to understand business context (e.g., "status: aprovado, pendente ou cancelado").
+`schema.json` carries column-level descriptions that are injected into the model prompt. `schema.sql` is the executable demo schema and seed dataset. The two files are deliberately separate so model-facing metadata is explicit rather than inferred at runtime.
 
-## Validation layers
+## Guardrails
 
-| Layer | Where | What it checks |
-|-------|-------|----------------|
-| Input length | Pydantic | min 5, max 500 chars |
-| Semantic gate | `query_mentions_schema()` | schema term presence |
-| LLM output cleaning | `_clean()` | removes fences, prefixes |
-| SQL safety | `is_safe_sql()` | whitelist of all tokens |
-| String parametrization | `_parametrize()` | bind params for literals |
-| Rate limiting | slowapi middleware | per-IP, configurable |
+| Layer | Implementation | Purpose |
+|---|---|---|
+| Request contract | Pydantic | rejects malformed/oversized questions |
+| Domain gate | `query_mentions_schema()` | avoids off-domain inference calls |
+| Output cleaning | `LLMService._clean()` | strips fences/prefix noise |
+| SQL validation | `is_safe_sql()` | permits only the bounded SELECT surface |
+| Literal binding | `SQLExecutor._parametrize()` | separates literal values from SQL text |
+| Bounded retry | `/query` orchestration | allows one controlled self-correction |
+| Rate limit | SlowAPI | limits requests per client |
 
-## Extending the schema
+The current validator rejects writes/DDL, comments, multiple statements, unknown schema identifiers, subqueries, UNIONs and JOINs.
 
-To add a new table:
+## LLM boundary
 
-1. Add DDL and seed data to `schema.sql`
-2. Add table metadata to `schema.json`
-3. Add relevant few-shot examples to `prompt_builder.py`
-4. The validator automatically allows the new table and columns
+`LLMService` owns provider-specific code. The API can boot without `GROQ_API_KEY`; `/health` remains available and `/query` returns a clear service-unavailable response until the provider is configured.
 
-## Swapping the LLM
+The current model is configurable through:
 
-Replace `LLMService` with any class implementing:
-
-```python
-def generate_sql(self, user_query: str, prompt: str) -> str: ...
-
-@property
-def last_inference_ms(self) -> float: ...
-
-def cache_info(self): ...  # must return object with .hits attribute
+```text
+GROQ_MODEL=llama-3.1-8b-instant
 ```
 
-The rest of the pipeline is LLM-agnostic.
+A future provider abstraction should be introduced when a second real provider is implemented, rather than adding an unused interface prematurely.
 
-## Connecting to a production database
+## Failure behavior
 
-Change `DATABASE_URL` in `.env`. SQLAlchemy supports PostgreSQL, MySQL, MSSQL and others with the appropriate driver (e.g. `psycopg2` for Postgres).
+1. Off-domain question → reject before calling the LLM.
+2. Missing provider configuration → HTTP 503.
+3. Empty/invalid generation → controlled client error.
+4. Unsafe or non-executable SQL → one fallback generation.
+5. Second failure → stop; do not create an unbounded agent loop.
 
-## Known gaps (intentional for demo scope)
+## Observability
 
-| Gap | Production fix |
-|-----|----------------|
-| No authentication | JWT / API key middleware |
-| In-memory rate limiting | Redis-backed slowapi storage |
-| No JOINs | Prompt engineering with relationship descriptions |
-| No audit logging | Structured log sink (Datadog, CloudWatch) |
-| SQLite | PostgreSQL + connection pooling |
+Successful responses include:
+
+- generated SQL;
+- returned rows and row count;
+- whether the generation came from cache;
+- LLM inference latency;
+- SQL execution latency;
+- total request latency.
+
+Production evolution should add request IDs, structured event logging, centralized metrics and model/token-cost telemetry.
+
+## Tests and CI
+
+The suite covers request validation, prompt construction, LLM-output cleaning, SQL safety rules, SQL execution and API integration with a mocked LLM. CI runs linting and tests on Python 3.11 and 3.12 and enforces an 85% coverage floor.
+
+## Known gaps
+
+| Gap | Production direction |
+|---|---|
+| No authentication | API key/JWT + authorization policy |
+| In-memory rate limiting | shared Redis-backed limiter |
+| No JOIN contract | relationship-aware generation + validator + evaluation set |
+| SQLite demo database | production RDBMS, migrations and connection-pool tuning |
+| No request-level tracing | request IDs + structured telemetry |
+| Single provider | add a provider interface when a second implementation exists |
+| Lexical domain gate | evaluate classifier/embedding routing only if domain scale requires it |
