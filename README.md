@@ -22,6 +22,20 @@ The important idea is simple:
 
 This project is intentionally small enough to understand in one interview, but realistic enough to discuss LLM safety, tool use, validation, fallback, API contracts, testing and production evolution.
 
+## Engineering evidence at a glance
+
+The project treats Text-to-SQL as a controlled backend workflow, not a free-form database chatbot.
+
+| Engineering concern | Evidence in the implementation |
+| --- | --- |
+| **Least privilege** | The database path accepts only a validated, single read-only `SELECT`. |
+| **AI bounded by policy** | Schema relevance gate, SQL allowlists/denylists and one corrective retry limit model autonomy. |
+| **Safe execution boundary** | SQLAlchemy execution and bind parameters keep generated SQL away from direct unrestricted execution. |
+| **Inspectable behavior** | API contracts return generated SQL, result metadata and latency information for each accepted request. |
+| **Regression protection** | Automated unit/API tests, Ruff and a coverage gate run in CI on Python 3.11 and 3.12. |
+
+The central engineering question is: **can a model propose a useful query without becoming an untrusted database operator?**
+
 ### 🎤 Interview presentation
 
 Want the project in presentation form instead of reading the full repository?
